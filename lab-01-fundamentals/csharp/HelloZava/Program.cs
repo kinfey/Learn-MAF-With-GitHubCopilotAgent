@@ -17,19 +17,35 @@ if (model != "gpt-5.5")
 
 try
 {
-    await using CopilotClient copilotClient = new();
+    string cliPath = Environment.GetEnvironmentVariable("COPILOT_CLI_PATH") ?? "/opt/homebrew/bin/copilot";
+    if (!File.Exists(cliPath))
+    {
+        Console.Error.WriteLine($"[FAIL] Copilot CLI not found at '{cliPath}'. Set COPILOT_CLI_PATH to your installed copilot binary.");
+        return 4;
+    }
+
+    await using CopilotClient copilotClient = new(new CopilotClientOptions
+    {
+        CliPath = cliPath,
+    });
     await copilotClient.StartAsync();
 
+    SessionConfig sessionConfig = new()
+    {
+        OnPermissionRequest = PermissionHandler.ApproveAll,
+        Model = model,
+    };
+
     AIAgent agent = copilotClient.AsAIAgent(
-        ownsClient: true,
-        name: "ZavaShopHello",
-        instructions:
-            "You are the ZavaShop AI assistant. Introduce yourself in two short sentences. " +
-            "Mention that ZavaShop sells beauty and lifestyle products across five regional " +
-            "warehouses, and that you are powered by GitHub Copilot GPT-5.5.");
+        sessionConfig,
+        true,
+        "zavashop-hello",
+        "ZavaShopHello",
+        "ZavaShop AI assistant");
 
     Console.Write("Agent  : ");
-    await foreach (AgentRunResponseUpdate update in agent.RunStreamingAsync("Please introduce yourself."))
+    await foreach (AgentResponseUpdate update in agent.RunStreamingAsync(
+        "Introduce yourself in two short sentences. Mention that ZavaShop sells beauty and lifestyle products across five regional warehouses, and that you are powered by GitHub Copilot GPT-5.5."))
     {
         Console.Write(update);
     }

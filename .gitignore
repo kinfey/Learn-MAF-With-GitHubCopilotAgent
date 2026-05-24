@@ -1,3 +1,6 @@
 # Ignore .NET build outputs in all projects
 **/bin/
 **/obj/
+
+# Ignore local environment overrides
+.env
