@@ -2,7 +2,7 @@
 
 ## Fan-out / fan-in
 
-Use `add_fan_out_edges(src, [t1, t2, ...])` to dispatch the same message in parallel and `add_fan_in_edges([s1, s2, ...], dst)` to collect a `list[T]` from the sources into one handler.
+Use `add_fan_out_edges(src, [t1, t2, ...])` to dispatch the same message in parallel and `add_fan_in_edges([s1, s2, ...], dst)` to collect a `list[T]` from the sources into one handler. Both helpers model true many-node groups: fan-out requires at least two targets, and fan-in requires at least two sources.
 
 ```python
 from agent_framework import (
@@ -43,6 +43,34 @@ workflow = (
 ```
 
 The fan-in handler's input type must be a `list[T]` (or `list[Union[...]]`) matching what the upstream executors emit.
+
+## Single-target map and manual batching
+
+When one executor emits many messages to one downstream executor, use a direct edge. Do **not** call `add_fan_out_edges(src, [dst])`; that is a single-target edge and will fail validation. If the downstream stage must wait for all messages, buffer them in a stateful executor and forward one batch when complete.
+
+```python
+class SupplierSelector(Executor):
+    def __init__(self, expected_count: int, id: str = "supplier_selector") -> None:
+        super().__init__(id=id)
+        self._expected_count = expected_count
+        self._forecasts: list[dict] = []
+
+    @handler
+    async def collect(self, forecast: dict, ctx: WorkflowContext[list[dict]]) -> None:
+        self._forecasts.append(forecast)
+        if len(self._forecasts) == self._expected_count:
+            batch = self._forecasts
+            self._forecasts = []
+            await ctx.send_message(batch)
+
+
+workflow = (
+    WorkflowBuilder(start_executor=weekly_trigger)
+    .add_edge(weekly_trigger, demand_forecaster)   # weekly_trigger sends one message per SKU
+    .add_edge(demand_forecaster, SupplierSelector(expected_count=5))
+    .build()
+)
+```
 
 ## Aggregating heterogeneous types
 
@@ -117,6 +145,7 @@ svg_path = viz.export(format="svg")               # raises ImportError without t
 | --- | --- |
 | Same input → many workers, single join | `add_fan_out_edges` + `add_fan_in_edges` |
 | Same input → many workers, no join (independent terminals) | `add_fan_out_edges` only |
+| One source emits many messages → one worker → one batched next stage | Direct `add_edge` plus a stateful buffering executor |
 | Different inputs from one source per branch | One `add_edge` per target, optionally with `target_id` in `ctx.send_message` |
 | Heterogeneous result types into one handler | `list[int | float | ...]` annotation on the fan-in handler |
 | Functional API (plain async) | `await asyncio.gather(branch1(), branch2(), ...)` inside `@workflow` |

@@ -212,6 +212,8 @@ await foreach (WorkflowEvent evt in run.WatchStreamAsync())
 }
 ```
 
+For deterministic map/reduce-style workflows where the same executor logic should run once per partition (for example, one demand forecast per SKU), instantiate one executor per partition with a stable unique executor ID, fan out to those instances, then join them with a barrier aggregator. The aggregator can collect messages in `HandleAsync` and emit the final workflow output from `OnMessageDeliveryFinishedAsync`.
+
 See [references/edges.md](references/edges.md) for the `ConcurrentStartExecutor` / `ConcurrentAggregationExecutor` skeletons and the `[SendsMessage]` / `[YieldsOutput]` attributes.
 
 ### Conditional Edges

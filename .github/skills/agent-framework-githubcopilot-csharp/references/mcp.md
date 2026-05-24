@@ -21,7 +21,9 @@ public static AIAgent AsAIAgent(
     string? instructions = null);
 ```
 
-That `IList<AITool>` is exactly what `McpClient.ListToolsAsync()` produces — every `McpClientTool` derives from `AITool`.
+That `IList<AITool>` is exactly what `McpClient.ListToolsAsync()` produces — every `McpClientTool` derives from `Microsoft.Extensions.AI.AIFunction`, which itself derives from `AITool`. Cast as `AIFunction` (not `AITool`) when you need to mix MCP tools into a `SessionConfig.Tools` (`ICollection<AIFunction>`).
+
+> ⚠️ **GitHub Copilot SDK gotcha — `OnPermissionRequest` is mandatory.** Even when every tool comes from an MCP client, the SDK's `CreateSessionAsync` throws `ArgumentException("An OnPermissionRequest handler is required when creating a session.")` if `SessionConfig.OnPermissionRequest` is null. The simple `AsAIAgent(ownsClient, instructions, tools)` overload still routes through `CreateSessionAsync` internally, so it throws too. **Prefer the `AsAIAgent(SessionConfig sessionConfig, ...)` overload** and set `OnPermissionRequest = PermissionHandler.ApproveAll` (or a stricter delegate) explicitly. The handler only ever sees the CLI-side kinds (`Shell` / `Read` / `Write` / `Url`) for Approach A — MCP tool calls go through the `McpClient` channel and never reach this delegate.
 
 ---
 
@@ -59,17 +61,26 @@ await using McpClient mcpClient = await McpClient.CreateAsync(new StdioClientTra
     Arguments = ["-y", "--verbose", "@modelcontextprotocol/server-github"],
 }));
 
-// 2) Discover tools advertised by the server.
+// 2) Discover tools advertised by the server (McpClientTool : AIFunction).
 IList<McpClientTool> mcpTools = await mcpClient.ListToolsAsync();
 
-// 3) Start the Copilot client and build the agent with those tools.
+// 3) Start the Copilot client.
 await using CopilotClient copilotClient = new();
 await copilotClient.StartAsync();
 
-AIAgent agent = copilotClient.AsAIAgent(
-    ownsClient: true,
-    instructions: "You answer questions related to GitHub repositories only.",
-    tools: [.. mcpTools.Cast<AITool>()]);
+// 4) Build a SessionConfig — OnPermissionRequest is mandatory (see gotcha above).
+SessionConfig sessionConfig = new()
+{
+    OnPermissionRequest = PermissionHandler.ApproveAll,
+    SystemMessage = new SystemMessageConfig
+    {
+        Mode = SystemMessageMode.Append,
+        Content = "You answer questions related to GitHub repositories only.",
+    },
+    Tools = [.. mcpTools.Cast<AIFunction>()],
+};
+
+AIAgent agent = copilotClient.AsAIAgent(sessionConfig, ownsClient: true);
 
 Console.WriteLine(await agent.RunAsync(
     "Summarize the last four commits to the microsoft/agent-framework repository?"));
@@ -77,7 +88,7 @@ Console.WriteLine(await agent.RunAsync(
 
 Notes
 - The MCP client (`mcpClient`) and the Copilot client (`copilotClient`) have independent lifetimes — keep both alive while the agent runs.
-- The MCP subprocess is spawned by `McpClient.CreateAsync`, not by the Copilot CLI. The CLI's `Mcp` permission kind does **not** intercept these tool calls; you control approval inside the tool layer or via `OnPermissionRequest` only for `Shell` / `Read` / `Write` / `Url`.
+- The MCP subprocess is spawned by `McpClient.CreateAsync`, not by the Copilot CLI. The CLI's `Mcp` permission kind does **not** intercept these tool calls; you control approval inside the tool layer. `OnPermissionRequest` only fires for `Shell` / `Read` / `Write` / `Url`.
 
 ### A.2 HTTP MCP server with OAuth (protected)
 
@@ -119,10 +130,19 @@ IList<McpClientTool> mcpTools = await mcpClient.ListToolsAsync();
 await using CopilotClient copilotClient = new();
 await copilotClient.StartAsync();
 
-AIAgent agent = copilotClient.AsAIAgent(
-    ownsClient: true,
-    instructions: "You answer questions related to the weather.",
-    tools: [.. mcpTools.Cast<AITool>()]);
+// Same SessionConfig pattern as A.1 — OnPermissionRequest is mandatory.
+SessionConfig sessionConfig = new()
+{
+    OnPermissionRequest = PermissionHandler.ApproveAll,
+    SystemMessage = new SystemMessageConfig
+    {
+        Mode = SystemMessageMode.Append,
+        Content = "You answer questions related to the weather.",
+    },
+    Tools = [.. mcpTools.Cast<AIFunction>()],
+};
+
+AIAgent agent = copilotClient.AsAIAgent(sessionConfig, ownsClient: true);
 
 Console.WriteLine(await agent.RunAsync("Get current weather alerts for New York?"));
 
@@ -155,11 +175,20 @@ IList<AITool> mcpTools = await mcpClient.ListAgentToolsWithTaskSupportAsync(task
 await using CopilotClient copilotClient = new();
 await copilotClient.StartAsync();
 
-AIAgent agent = copilotClient.AsAIAgent(
-    ownsClient: true,
-    instructions: "You answer data-analysis questions by invoking the available tools. "
+// Long-running wrapper returns IList<AITool>; cast each element back to AIFunction for SessionConfig.Tools.
+SessionConfig sessionConfig = new()
+{
+    OnPermissionRequest = PermissionHandler.ApproveAll,
+    SystemMessage = new SystemMessageConfig
+    {
+        Mode = SystemMessageMode.Append,
+        Content = "You answer data-analysis questions by invoking the available tools. "
                 + "Always invoke a tool when one matches the request.",
-    tools: mcpTools);
+    },
+    Tools = [.. mcpTools.Cast<AIFunction>()],
+};
+
+AIAgent agent = copilotClient.AsAIAgent(sessionConfig, ownsClient: true);
 
 AgentResponse response = await agent.RunAsync(
     "Analyze the dataset named 'sales-2025-q1' and summarize the findings.");
@@ -176,7 +205,7 @@ await foreach (AgentResponseUpdate update in agent.RunStreamingAsync(
 
 ### A.4 Combining MCP tools with C# function tools
 
-`AsAIAgent`'s `tools` parameter is just an `IList<AITool>`. Mix `AIFunctionFactory.Create(...)` results with MCP tools freely:
+`SessionConfig.Tools` is `ICollection<AIFunction>`. Mix `AIFunctionFactory.Create(...)` results with MCP tools freely — they share the same base type:
 
 ```csharp
 using Microsoft.Extensions.AI;
@@ -184,12 +213,22 @@ using Microsoft.Extensions.AI;
 string GetWeather(string location) =>
     $"The weather in {location} is sunny with a high of 25°C.";
 
-List<AITool> tools = [.. mcpTools.Cast<AITool>(), AIFunctionFactory.Create(GetWeather)];
+SessionConfig sessionConfig = new()
+{
+    OnPermissionRequest = PermissionHandler.ApproveAll,
+    SystemMessage = new SystemMessageConfig
+    {
+        Mode = SystemMessageMode.Append,
+        Content = "You can use local helpers and the connected MCP server.",
+    },
+    Tools =
+    [
+        .. mcpTools.Cast<AIFunction>(),                  // McpClientTool : AIFunction
+        AIFunctionFactory.Create(GetWeather),
+    ],
+};
 
-AIAgent agent = copilotClient.AsAIAgent(
-    ownsClient: true,
-    instructions: "You can use local helpers and the connected MCP server.",
-    tools: tools);
+AIAgent agent = copilotClient.AsAIAgent(sessionConfig, ownsClient: true);
 ```
 
 ---

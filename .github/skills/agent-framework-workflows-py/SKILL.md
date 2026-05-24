@@ -245,8 +245,8 @@ Functional workflows also support `as_agent()`, HITL via `ctx: RunContext` + `ct
 | `WorkflowBuilder(start_executor=, checkpoint_storage=, max_iterations=, output_from=, intermediate_output_from=)` | Create a builder |
 | `.add_edge(src, dst, condition=None, target_id=None)` | Connect two executors; optional predicate over the upstream message |
 | `.add_chain([a, b, c])` | Sugar for sequential edges |
-| `.add_fan_out_edges(src, [t1, t2, ...])` | Same message to many targets in parallel |
-| `.add_fan_in_edges([s1, s2, ...], dst)` | Collect a `list[T]` from many sources into one handler |
+| `.add_fan_out_edges(src, [t1, t2, ...])` | Same message to many targets in parallel; requires at least two targets |
+| `.add_fan_in_edges([s1, s2, ...], dst)` | Collect a `list[T]` from many sources into one handler; requires at least two sources |
 | `.add_switch_case_edge_group(src, [Case(condition=, target=), Default(target=)])` | One-of-N routing |
 | `.add_multi_selection_edge_group(src, targets, selection_func=)` | Dynamic subset fan-out |
 | `.build()` → `Workflow` | Materialize the graph |
@@ -502,6 +502,7 @@ This unlocks the reflection pattern (Worker ↔ Reviewer loop wrapped as a singl
 - **Use `response_format`** on agents that drive routing — never parse free text.
 - **Store large payloads in `ctx.set_state`** and pass small references (IDs) on edges.
 - **Helper-build pattern**: wrap construction in `def create_workflow(): ...` so each run gets fresh executor instances.
+- **Single-target map pattern**: if one executor emits many messages to one downstream executor, use `.add_edge(src, dst)` rather than `.add_fan_out_edges(src, [dst])`. If those messages must become one batch before the next stage, use a stateful `Executor` with `@handler` to buffer and forward once complete.
 - **Pick explicit `output_from`** in new code; compatibility mode emits a deprecation warning.
 - **`@step` only what's expensive.** Cheap functions can stay un-decorated and replay freely.
 - **Treat participant names as stable identifiers** — especially for Magentic checkpoints.

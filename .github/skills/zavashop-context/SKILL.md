@@ -99,7 +99,7 @@ Use these role names verbatim when naming agents/executors in Lab 4:
 
 **Supply-chain workflow**
 - `DemandForecaster` — predicts next-week demand per SKU.
-- `SupplierSelector` — picks a supplier from `data/zava_suppliers.json` (if present).
+- `SupplierSelector` — picks a supplier from `data/zava_suppliers.json` if present; otherwise use a static in-code supplier table for deterministic lab workflows.
 - `PurchaseOrderAgent` — emits a structured PO.
 - `LogisticsCoordinator` — schedules inbound transport.
 - `InventoryUpdater` — increments warehouse stock once received.

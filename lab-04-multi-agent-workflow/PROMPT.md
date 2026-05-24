@@ -23,7 +23,7 @@ Allowed values: `python`, `csharp`, `both`. The agent reads only the matching wo
 Deliver **two** MAF Workflows for ZavaShop:
 
 - **Retail workflow** — Sequential with a conditional handoff to a backorder branch.
-- **Supply-chain workflow** — Concurrent fan-out over five SKUs converging into a sequential PO chain.
+- **Supply-chain workflow** — SKU fan-out over five SKUs converging into a deterministic inventory-update summary.
 
 ## Deliverables
 
@@ -36,11 +36,10 @@ Deliver **two** MAF Workflows for ZavaShop:
 
 ### C# / .NET (`target_language: csharp` or `both`) — inside `lab-04-multi-agent-workflow/csharp/`
 
-- `Workflows/Workflows.csproj` — `Microsoft.NET.Sdk`, `net10.0`, `Nullable=enable`, refs (all `--prerelease`): `Microsoft.Agents.AI.Workflows`, `Microsoft.Agents.AI`, `Microsoft.Agents.AI.GitHub.Copilot`, `GitHub.Copilot.SDK`.
-- `Workflows/RetailWorkflow.cs` — `public static Workflow BuildRetailWorkflow(AIAgent advisor, AIAgent inventory)`.
+- `Workflows/Workflows.csproj` — `Microsoft.NET.Sdk`, `net10.0`, `Nullable=enable`, refs (all `--prerelease`): `Microsoft.Agents.AI.Workflows`, `Microsoft.Agents.AI`, `Microsoft.Agents.AI.GitHub.Copilot`, `Microsoft.Extensions.AI`.
+- `Workflows/Records.cs` — shared records: `CustomerOrder`, `OrderRecord`, `DemandForecast`, `SkuUpdate`, `InventorySummary`.
+- `Workflows/RetailWorkflow.cs` — `public static Workflow BuildRetailWorkflow(AIAgent? advisor = null, AIAgent? inventory = null)`.
 - `Workflows/SupplyChainWorkflow.cs` — `public static Workflow BuildSupplyChainWorkflow()`.
-- `Workflows/RetailExecutors/` — `ProductAdvisorExecutor.cs`, `InventoryCheckerExecutor.cs`, `OrderProcessor.cs`, `ShipmentTrigger.cs`, `BackorderHandler.cs`.
-- `Workflows/SupplyChainExecutors/` — `WeeklyTrigger.cs`, `DemandForecaster.cs`, `SupplierSelector.cs`, `PurchaseOrderAgent.cs`, `LogisticsCoordinator.cs`, `InventoryUpdater.cs`.
 - `Verify/Verify.csproj` — refs `../Workflows/Workflows.csproj`.
 - `Verify/Program.cs` — runs both workflows via `InProcessExecution.RunStreamingAsync` + `WatchStreamAsync()`, asserts every criterion, exits 0 on full pass with final line `[OK] Lab 4 complete.`.
 
@@ -49,17 +48,17 @@ Deliver **two** MAF Workflows for ZavaShop:
 | Workflow | Python (`snake_case`) | C# (`PascalCase` passed to `Executor<TIn,TOut>(...)` base ctor) |
 | --- | --- | --- |
 | Retail | `product_advisor`, `inventory_checker`, `order_processor`, `shipment_trigger`, `backorder_handler` | `ProductAdvisor`, `InventoryChecker`, `OrderProcessor`, `ShipmentTrigger`, `BackorderHandler` |
-| Supply chain | `weekly_trigger`, `demand_forecaster`, `supplier_selector`, `purchase_order_agent`, `logistics_coordinator`, `inventory_updater` | `WeeklyTrigger`, `DemandForecaster`, `SupplierSelector`, `PurchaseOrderAgent`, `LogisticsCoordinator`, `InventoryUpdater` |
+| Supply chain | `weekly_trigger`, `demand_forecaster`, `supplier_selector`, `purchase_order_agent`, `logistics_coordinator`, `inventory_updater` | `WeeklyTrigger`, `DemandForecaster_LIP_001`, `DemandForecaster_LIP_002`, `DemandForecaster_SKN_030`, `DemandForecaster_FRG_009`, `DemandForecaster_TOL_003`, `SupplyChainAggregator` |
 
 ## Deterministic recipes (use these — no LLM calls for forecasts/POs)
 
 | Field | Python | C# |
 | --- | --- | --- |
-| `predicted_units_next_week` | `hash(sku) % 100 + 50` | `Math.Abs(sku.GetHashCode()) % 100 + 50` |
-| `order_id` | `f"ORD-{9000 + counter:04d}"`, counter starts at 1 | `$"ORD-{Interlocked.Increment(ref s_counter)}"` with `static int s_counter = 9000` |
+| `predicted_units_next_week` | `hash(sku) % 100 + 50` | `Math.Abs(sku.GetHashCode(StringComparison.Ordinal)) % 100 + 50` |
+| `order_id` | `f"ORD-{9000 + counter:04d}"`, counter starts at 1 | `$"ORD-{9000 + Interlocked.Increment(ref s_orderCounter):0000}"` with `static int s_orderCounter = 0` |
 | `tracking_number` | `f"ZS-{secrets.token_hex(4).upper()}"` | `$"ZS-{Convert.ToHexString(RandomNumberGenerator.GetBytes(4))}"` |
 | `po_id` | `f"PO-X{1234 + counter}"`, counter starts at 0 | `$"PO-X{Interlocked.Increment(ref s_poCounter) + 1233}"` with `static int s_poCounter = 0` |
-| `eta_days` | `7 + hash(po_id) % 7` | `7 + Math.Abs(poId.GetHashCode()) % 7` |
+| `eta_days` | `7 + hash(po_id) % 7` | Not used by the current C# aggregator. |
 
 ## Acceptance criteria
 
@@ -72,18 +71,18 @@ Deliver **two** MAF Workflows for ZavaShop:
 
 ### Supply-chain workflow (both languages)
 
-5. Python: `ConcurrentBuilder` (or fan-out edges). C#: `WorkflowBuilder.AddFanOutEdge(trigger, forecaster, partitions: new[] { "LIP-001", "LIP-002", "SKN-030", "FRG-009", "TOL-003" })` + `AddFanInBarrierEdge(forecaster, supplier)`. Each SKU runs `demand_forecaster` / `DemandForecaster` exactly once.
-6. `supplier_selector` / `SupplierSelector` uses a static table inside the file (no JSON load).
+5. Python: `weekly_trigger` emits one message per SKU to a single `demand_forecaster` over `add_edge`; `SupplierSelector` buffers the five forecasts before forwarding a batch to the PO chain. C#: `WorkflowBuilder.AddFanOutEdge(trigger, [sku-specific DemandForecaster_* executors])` + `AddFanInBarrierEdge(forecasters, aggregator)`. Each SKU runs `demand_forecaster` / one `DemandForecaster_*` executor exactly once.
+6. Python `supplier_selector` uses a static table inside the file (no JSON load). C# keeps the supply-chain aggregation deterministic inside `SupplyChainWorkflow.cs`.
 7. Final output: Python dict `{"updated": [...], "total_units": int}`; C# `record InventorySummary(IReadOnlyList<SkuUpdate> Updated, int TotalUnits)`. One entry per SKU and `TotalUnits > 0`.
 
 ### Both languages
 
-8. Every workflow surfaces its result via `ctx.yield_output(...)` (Python) or `await context.YieldOutputAsync(...)` (C#) — never `print` / `Console.WriteLine` in business logic. The C# builder must end with `.WithOutputFrom(...)` so `StreamingRun` emits `OutputEvent<T>`.
+8. Every workflow surfaces its result via `ctx.yield_output(...)` (Python) or `await context.YieldOutputAsync(...)` (C#) — never `print` / `Console.WriteLine` in business logic. The C# builder must call `.WithOutputFrom(...)` for every output executor so `StreamingRun` emits `WorkflowOutputEvent`.
 9. Both workflows are importable / referenceable: Python `from retail_workflow import build_retail_workflow` from outside the folder; C# the `Workflows.csproj` is consumable by Lab 5 via `ProjectReference`.
 10. `verify.py` / `Verify/Program.cs` asserts:
     - Retail happy: `{"sku": "LIP-001", "quantity": 2, "preferred_warehouse": "WH-SEA"}` → `state == "RESERVED"`.
     - Retail backorder: `{"sku": "LIP-001", "quantity": 5, "preferred_warehouse": "WH-DXB"}` → `state == "BACKORDERED"`.
-    - Supply chain: 5 POs total, each input SKU represented exactly once.
+    - Supply chain: 5 updates total, each input SKU represented exactly once.
     - Final line: `[OK] Lab 4 complete.`
 
 ## Verification commands
@@ -109,7 +108,7 @@ dotnet run --project Verify
 - [ ] Executor IDs match the table above exactly (snake_case for Python, PascalCase for C#).
 - [ ] Deterministic recipes used (no LLM in forecasts / PO generation).
 - [ ] Both factories importable / referenceable from outside the lab folder.
-- [ ] C# builder ends with `.WithOutputFrom(...)` so `WatchStreamAsync()` emits `OutputEvent<T>`.
-- [ ] C# uses `AddFanOutEdge` + `AddFanInBarrierEdge` (not `AddEdge`) for the supply-chain fan-out.
+- [ ] C# builder calls `.WithOutputFrom(...)` so `WatchStreamAsync()` emits `WorkflowOutputEvent`.
+- [ ] C# uses `AddFanOutEdge` + `AddFanInBarrierEdge` with one SKU-specific forecaster executor per SKU.
 - [ ] Each acceptance criterion mapped to a line in `verify.py` and/or `Verify/Program.cs`.
 - [ ] No edits outside `lab-04-multi-agent-workflow/`.

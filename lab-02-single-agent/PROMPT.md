@@ -42,18 +42,20 @@ For `target_language: csharp` (or `both`), under `lab-02-single-agent/csharp/`:
 
 ## Tool signatures (exactly these)
 
-Python:
+Python (read-only catalog lookups — declare `approval_mode="never_require"` so the framework gate is skipped):
 
 ```python
-@tool
+@tool(approval_mode="never_require")
 def search_products(query: str, category: str | None = None, max_price_usd: float | None = None) -> list[dict]: ...
 
-@tool
+@tool(approval_mode="never_require")
 def get_product_details(sku: str) -> dict | str: ...   # returns "NOT_FOUND: <sku>" on miss
 
-@tool
+@tool(approval_mode="never_require")
 def recommend_alternatives(sku: str, max_results: int = 3) -> list[dict]: ...
 ```
+
+> **Python permission handler is mandatory.** The Copilot CLI raises a `CUSTOM_TOOL` `PermissionRequest` for every function-tool invocation, independently of the `@tool` decorator. `build_agent()` MUST pass `default_options={"on_permission_request": handler}` where `handler` returns `PermissionRequestResult(kind="approve-once")`. The valid literals are `"approve-once" | "reject" | "user-not-available" | "no-result"` (NOT `"approved"`).
 
 C# (static methods on `CatalogTools`, each parameter decorated with `[Description(...)]`):
 
@@ -67,20 +69,21 @@ public static IReadOnlyList<CatalogRow> RecommendAlternatives(string sku, int ma
 
 1. Three tools exist with the signatures above; tools read only from `data/zava_catalog.json`. No hard-coded SKUs.
 2. The agent is built once at module/program scope via a `build_agent()` factory (Python) or a single `client.AsAIAgent(...)` call in `Program.cs` (C#), and run inside `async with` / `await using`.
-3. The verify script uses **one** session for all three turns (Python `agent.create_session()` / C# `await agent.CreateSessionAsync()`).
-4. Turn 1: *"Do you sell a red matte lipstick under $30?"* → reply contains `LIP-001` **and** `$24`.
-5. Turn 2: *"What's the difference between SKN-027 and SKN-030?"* → reply contains both SKUs **and** the words `night` and `vitamin C`.
-6. Turn 3: *"Tell me an alternative to FRG-015 in a similar price range."* → reply contains `FRG-009`.
-7. Verify script exits 0 on full pass, non-zero otherwise. Final line: `[OK] Lab 2 complete.`
+3. Python `build_agent()` wires an approve-all `on_permission_request` handler via `default_options` so `CUSTOM_TOOL` calls aren't denied. C# wires `OnPermissionRequest = PermissionHandler.ApproveAll` on the `SessionConfig`.
+4. The verify script uses **one** session for all three turns (Python `agent.create_session()` / C# `await agent.CreateSessionAsync()`).
+5. Turn 1: *"Do you sell a red matte lipstick under $30?"* → reply contains `LIP-001` **and** `$24`.
+6. Turn 2: *"What's the difference between SKN-027 and SKN-030?"* → reply contains both SKUs **and** the words `night` and `vitamin C`.
+7. Turn 3: *"Tell me an alternative to FRG-015 in a similar price range."* → reply contains `FRG-009`.
+8. Verify script exits 0 on full pass, non-zero otherwise. Final line: `[OK] Lab 2 complete.`
 
 ## Verification command
 
-Python:
+Python (uses the workshop-root venv created in `SETUP.md`):
 
 ```bash
 cd lab-02-single-agent
-uv pip install -r requirements.txt
-python verify.py
+uv pip install --python ../.venv/bin/python -r requirements.txt
+../.venv/bin/python verify.py
 ```
 
 C# / .NET:

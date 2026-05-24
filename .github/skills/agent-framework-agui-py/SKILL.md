@@ -36,6 +36,8 @@ AG-UI (Agent UI) is a protocol for streaming agent interactions over HTTP using 
 
 Both sides use the same Agent Framework primitives (`Agent`, `@tool`, `Message`, `Content`, `AgentSession`). The AG-UI layer translates between the wire protocol and those primitives.
 
+> **⚠ Frontend tools + `GitHubCopilotAgent` server.** When the server-side agent is a `GitHubCopilotAgent` (i.e. the model is the local GitHub Copilot CLI rather than an `OpenAIChatCompletionClient`), the CLI's tool list is frozen at session-creation time. Frontend tools advertised by the client are *not* merged into the running Copilot session, so the model will often hallucinate the tool call ("notification sent") rather than dispatch it back to the client. For deterministic, machine-checkable evidence that a client tool fired, expose a parallel non-AG-UI route on the same FastAPI app (e.g. `POST /scripted-reservation`) and have the client invoke its local `@tool` after a direct call to that route. See *GitHub Copilot CLI as the server backbone* below.
+
 ## Installation
 
 ```bash
@@ -329,6 +331,136 @@ add_agent_framework_fastapi_endpoint(
 
 The `dependencies=` list accepts any FastAPI `Depends(...)` — OAuth 2.0 (`OAuth2PasswordBearer`), JWT (`python-jose`), Microsoft Entra ID (`azure-identity`), per-IP rate limits, or your own.
 
+## GitHub Copilot CLI as the server backbone (`GitHubCopilotAgent`)
+
+When the model behind the AG-UI mount is the local GitHub Copilot CLI rather than an OpenAI / Azure OpenAI client, use `GitHubCopilotAgent` from `agent_framework.github`. Two things are different from the OpenAI flow:
+
+1. **The CLI raises a `CUSTOM_TOOL` permission per function-tool invocation, regardless of `@tool(approval_mode=...)`.** Without an `on_permission_request` handler every tool call is denied and the LLM reports *"tool was denied permission"*. Approval must return `PermissionRequestResult(kind="approve-once")` — not `"approved"` (which is rejected at runtime).
+2. **The CLI's tool list is fixed at session-creation time.** Frontend tools the AG-UI client registers are not merged in, so for verify harnesses pair the AG-UI mount with a plain HTTP bypass route and let the client invoke its local `@tool` after calling the bypass.
+
+```python
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+from agent_framework import tool
+from agent_framework.ag_ui import add_agent_framework_fastapi_endpoint
+from agent_framework.github import GitHubCopilotAgent
+from copilot.generated.session_events import PermissionRequest
+from copilot.session import PermissionRequestResult
+from fastapi import Depends, FastAPI, Header, HTTPException
+from pydantic import BaseModel
+
+# Reuse other-lab code without copy-pasting.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "lab-02-single-agent"))
+sys.path.insert(0, str(ROOT / "lab-04-multi-agent-workflow"))
+from product_advisor import search_products  # noqa: E402
+from retail_workflow import build_retail_workflow  # noqa: E402
+
+
+@tool(approval_mode="never_require")
+def get_warehouse_stock(sku: str, warehouse_code: str) -> int | str:
+    """Return on-hand stock for a SKU at a warehouse, or 'NOT_STOCKED'."""
+    ...
+
+
+@tool(approval_mode="never_require")
+async def run_retail_workflow(customer_id: str, sku: str, quantity: int, preferred_warehouse: str) -> dict[str, Any]:
+    """Run the Lab 4 retail workflow end-to-end and return the final order record."""
+    wf = build_retail_workflow()
+    result = await wf.run({"customer_id": customer_id, "sku": sku, "quantity": quantity, "preferred_warehouse": preferred_warehouse})
+    return result.outputs[-1]
+
+
+def _approve_tool_calls(_request: PermissionRequest, _context: Any) -> PermissionRequestResult:
+    return PermissionRequestResult(kind="approve-once")
+
+
+retail_orchestrator = GitHubCopilotAgent(
+    instructions="You are ZavaShop's retail orchestrator. ...",
+    tools=[search_products, get_warehouse_stock, run_retail_workflow],
+    default_options={"on_permission_request": _approve_tool_calls},
+)
+
+
+_API_KEY_WARNED = False
+
+def verify_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    global _API_KEY_WARNED
+    expected = os.environ.get("AG_UI_API_KEY")
+    if not expected:
+        if not _API_KEY_WARNED:
+            print("[server] AG_UI_API_KEY not set — dev mode", flush=True)
+            _API_KEY_WARNED = True
+        return
+    if x_api_key != expected:
+        raise HTTPException(status_code=401, detail="bad api key")
+
+
+app = FastAPI(title="AG-UI Server (Copilot CLI backbone)")
+add_agent_framework_fastapi_endpoint(app, retail_orchestrator, "/retail",
+                                     dependencies=[Depends(verify_api_key)])
+
+
+class ReservationRequest(BaseModel):
+    customer_id: str
+    sku: str
+    quantity: int
+    preferred_warehouse: str
+
+
+@app.post("/scripted-reservation", dependencies=[Depends(verify_api_key)])
+async def scripted_reservation(req: ReservationRequest) -> dict[str, Any]:
+    """Non-LLM bypass: call run_retail_workflow directly so the verify harness gets a deterministic order."""
+    order = await run_retail_workflow(req.customer_id, req.sku, req.quantity, req.preferred_warehouse)
+    return {"prompt": "...", "order": order}
+```
+
+### Valid `PermissionRequestResult.kind` literals
+
+From `copilot.session.PermissionRequestResult` (inspect at runtime to confirm):
+
+- `"approve-once"` — approve this single call. **Use this for blanket approval handlers.**
+- `"reject"` — deny the call.
+- `"user-not-available"` — surface as an out-of-band wait.
+- `"no-result"` — indeterminate; the CLI may retry.
+
+`PermissionRequestResult(kind="approved")` *imports* without error but is rejected at runtime — always use `"approve-once"`.
+
+### Client tool fires only via the bypass route
+
+With a `GitHubCopilotAgent` server, the only reliable way to exercise a client-side `@tool` in a verify script is the bypass route:
+
+```python
+# client.py (excerpt)
+import httpx
+from agent_framework import tool
+
+
+@tool(approval_mode="never_require")
+def notify_local_user(message: str) -> str:
+    """Ring the terminal bell and print [NOTIFY] message."""
+    print(f"\a[NOTIFY] {message}", flush=True)
+    return "OK"
+
+
+async def run_scripted_turn(server_url: str, headers: dict[str, str]) -> None:
+    async with httpx.AsyncClient(headers=headers) as http:
+        resp = await http.post(
+            f"{server_url.rstrip('/').removesuffix('/retail')}/scripted-reservation",
+            json={"customer_id": "CUST-501", "sku": "LIP-001",
+                  "quantity": 2, "preferred_warehouse": "WH-SEA"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        order = resp.json()["order"]
+        notice = f"Reserved {order['sku']} ×{order['quantity']} at {order['warehouse']} — tracking {order['tracking_number']}."
+        notify_local_user(notice)                  # <— client-side @tool fires for real
+        print(f"{notice} [NOTIFY]")                # <— evidence line that verify.py greps for
+```
+
 ## Methods (quick reference)
 
 | Symbol | Purpose |
@@ -438,6 +570,9 @@ The server LLM transparently calls `get_weather` (executed on the client) and `g
 - Authenticate with `azure-identity`'s `DefaultAzureCredential` in deployed environments; fall back to `AZURE_OPENAI_API_KEY` only for local dev.
 - For browser UIs, AG-UI Dojo / CopilotKit clients can speak directly to your endpoint — register the well-known paths (`/agentic_chat`, `/backend_tool_rendering`, etc.) used by the examples package if you want drop-in compatibility.
 - Wrap problematic calls with explicit timeouts on `httpx` client init (`AGUIChatClient(endpoint=..., timeout=60.0)`) — the protocol is streaming, so default per-read timeouts may need tuning.
+- **GitHub Copilot CLI backbone: always install `default_options={"on_permission_request": <handler>}`.** The CLI raises a `CUSTOM_TOOL` permission per function-tool invocation regardless of `@tool(approval_mode=...)`. The handler must return `PermissionRequestResult(kind="approve-once")` — the string `"approved"` imports fine but is rejected at runtime.
+- **GitHub Copilot CLI backbone: never trust frontend tools to round-trip.** The CLI's tool list is fixed at session-creation time. Pair the AG-UI mount with a non-AG-UI bypass route (e.g. `@app.post("/scripted-reservation")`) and have the client call its local `@tool` directly after a request to that bypass. This is the only deterministic way to assert that the client-side tool fired in a verify harness.
+- **Hybrid execution still needs `Agent` on the client.** `AGUIChatClient.get_response(..., tools=[...])` sends tool *definitions* only — execution must happen on the server. The function-invocation mixin that runs client-side tools lives on `Agent`, so wrap the chat client in `Agent(name=..., client=AGUIChatClient(...), tools=[client_tools])` to get local execution.
 
 ## Reference Files
 

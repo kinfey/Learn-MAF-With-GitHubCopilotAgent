@@ -100,6 +100,72 @@ var workflow = new WorkflowBuilder(start)
     .Build();
 ```
 
+### Partitioned map/reduce with one executor per partition
+
+For deterministic workflows that should run the same logic once per partition, create one executor instance per partition with a stable unique `ExecutorId`, then fan out to all instances and fan in to one aggregator. This keeps event streams attributable per partition and avoids relying on hidden mutable global partition state.
+
+```csharp
+internal sealed class DemandForecasterExecutor : Executor<string, DemandForecast>
+{
+    private readonly string _sku;
+
+    public DemandForecasterExecutor(string sku)
+        : base($"DemandForecaster_{sku.Replace('-', '_')}")
+    {
+        _sku = sku;
+    }
+
+    public override ValueTask<DemandForecast> HandleAsync(
+        string weekIso, IWorkflowContext context, CancellationToken cancellationToken = default)
+    {
+        int predicted = Math.Abs(_sku.GetHashCode(StringComparison.Ordinal)) % 100 + 50;
+        return ValueTask.FromResult(new DemandForecast(_sku, predicted, weekIso));
+    }
+}
+
+[YieldsOutput(typeof(InventorySummary))]
+internal sealed class SupplyChainAggregatorExecutor() : Executor<DemandForecast>("SupplyChainAggregator")
+{
+    private readonly List<DemandForecast> _forecasts = [];
+    private static int s_poCounter;
+
+    public override ValueTask HandleAsync(
+        DemandForecast forecast, IWorkflowContext context, CancellationToken cancellationToken = default)
+    {
+        _forecasts.Add(forecast);
+        return ValueTask.CompletedTask;
+    }
+
+    protected override async ValueTask OnMessageDeliveryFinishedAsync(
+        IWorkflowContext context, CancellationToken cancellationToken = default)
+    {
+        InventorySummary summary = BuildSummary(_forecasts);
+        _forecasts.Clear();
+        await context.YieldOutputAsync(summary, cancellationToken);
+    }
+
+    private static InventorySummary BuildSummary(IReadOnlyList<DemandForecast> forecasts)
+    {
+        List<SkuUpdate> updates = [];
+        foreach (DemandForecast forecast in forecasts)
+        {
+            string poId = $"PO-X{Interlocked.Increment(ref s_poCounter) + 1233}";
+            updates.Add(new SkuUpdate(forecast.Sku, forecast.PredictedUnitsNextWeek, poId, $"LX-{poId[3..]}"));
+        }
+        return new InventorySummary(updates, updates.Sum(u => u.Units));
+    }
+}
+
+DemandForecasterExecutor[] forecasters = skus.Select(sku => new DemandForecasterExecutor(sku)).ToArray();
+SupplyChainAggregatorExecutor aggregator = new();
+
+Workflow workflow = new WorkflowBuilder(trigger)
+    .AddFanOutEdge(trigger, [.. forecasters.Cast<Executor>()])
+    .AddFanInBarrierEdge([.. forecasters.Cast<Executor>()], aggregator)
+    .WithOutputFrom(aggregator)
+    .Build();
+```
+
 ### Start executor for fan-out to agents
 
 Agent executors don't process queued messages until a `TurnToken` arrives — the start executor broadcasts both:

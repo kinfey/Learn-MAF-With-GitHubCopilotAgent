@@ -44,19 +44,28 @@ Two highlights worth understanding before writing code:
 - **Frontend tools.** Tools registered on the **client** (via `AIFunctionFactory.Create`) are exposed to the server's model as callable functions. The server emits `FunctionCallContent`; the client executes the .NET delegate locally and returns the result. This is how AG-UI does generative UI / browser-side actions.
 - **Backend tools** registered on the **server** run server-side as usual. The server emits no client-side dispatch; the client just sees text deltas.
 
+> **⚠ Frontend tools + GitHub Copilot CLI backbone.** When the server-side `AIAgent` is built from `CopilotClient.AsAIAgent(...)` (i.e. the model is the local GitHub Copilot CLI rather than an `IChatClient` such as Azure OpenAI), the CLI's tool list is frozen at `SessionConfig` time. Frontend tools advertised by the AG-UI client are not merged into the running Copilot session, so the model is likely to **hallucinate** the tool call ("notification sent") rather than dispatch `FunctionCallContent` back to the client. For deterministic, machine-checkable evidence that a client tool fired, expose a parallel non-AG-UI HTTP route (e.g. `app.MapPost("/scripted-reservation", ...)`) and have the client invoke its local delegate after a direct call to that route. See *GitHub Copilot CLI as the backbone* below.
+
 ## Installation
 
 ```bash
-# Server
+# Server (Azure OpenAI backbone)
 dotnet add package Microsoft.Agents.AI.Hosting.AGUI.AspNetCore --prerelease
 dotnet add package Microsoft.Agents.AI.OpenAI --prerelease
 dotnet add package Azure.AI.OpenAI
 dotnet add package Azure.Identity
 
+# Server (GitHub Copilot CLI backbone — see section below)
+dotnet add package Microsoft.Agents.AI.Hosting.AGUI.AspNetCore --prerelease
+dotnet add package Microsoft.Agents.AI.GitHub.Copilot --prerelease   # GitHub.Copilot.SDK flows in transitively — do NOT add it directly
+dotnet add package Microsoft.Agents.AI.Hosting --prerelease
+
 # Client
 dotnet add package Microsoft.Agents.AI --prerelease
 dotnet add package Microsoft.Agents.AI.AGUI --prerelease
 ```
+
+> Adding `GitHub.Copilot.SDK` as a direct `<PackageReference>` breaks restore with `CopilotCliVersion is not set` — `Microsoft.Agents.AI.GitHub.Copilot` ships the MSBuild props that set that property and pulls the SDK in for you. Stick to the framework package.
 
 The server project's csproj uses `Microsoft.NET.Sdk.Web`:
 
@@ -355,6 +364,101 @@ Content-Type: application/json
 
 The response is an SSE stream — open it in the REST Client or `curl --no-buffer` to watch events arrive.
 
+### GitHub Copilot CLI as the backbone (`CopilotClient.AsAIAgent`)
+
+When the model behind the AG-UI mount is the local GitHub Copilot CLI (rather than an `IChatClient`), build the agent through `SessionConfig` so the CLI receives the system prompt, the model name, the tool list, **and** a permission handler in one shot. The bare `AsAIAgent(ownsClient, name, instructions, tools)` overload throws `ArgumentException "An OnPermissionRequest handler is required"` at the first tool call.
+
+```csharp
+using GitHub.Copilot.SDK;
+using Microsoft.Agents.AI;
+using Microsoft.Agents.AI.GitHub.Copilot;
+using Microsoft.Agents.AI.Hosting;
+using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
+using Microsoft.Extensions.AI;
+
+const string AgentName = "retail_orchestrator";
+const string Instructions = "You are ZavaShop's retail orchestrator. ...";
+
+string cliPath = Environment.GetEnvironmentVariable("COPILOT_CLI_PATH")
+              ?? Environment.GetEnvironmentVariable("GITHUB_COPILOT_CLI_PATH")
+              ?? "copilot";
+string model   = Environment.GetEnvironmentVariable("GITHUB_COPILOT_MODEL") ?? "gpt-5.5";
+
+CopilotClient copilotClient = new(new CopilotClientOptions { CliPath = cliPath });
+await copilotClient.StartAsync();                            // boot the CLI subprocess
+
+SessionConfig sessionConfig = new()
+{
+    OnPermissionRequest = PermissionHandler.ApproveAll,      // REQUIRED — see Best Practices
+    Model               = model,
+    SystemMessage       = new SystemMessageConfig { Mode = SystemMessageMode.Append, Content = Instructions },
+    Tools =
+    [
+        AIFunctionFactory.Create(ServerTools.SearchProducts,    name: "search_products",     description: "Search the catalog."),
+        AIFunctionFactory.Create(ServerTools.GetWarehouseStock, name: "get_warehouse_stock", description: "Get stock for a SKU at a warehouse."),
+    ],
+};
+
+AIAgent retailAgent = copilotClient.AsAIAgent(
+    sessionConfig,
+    ownsClient: true,                                        // agent disposes the CLI subprocess on shutdown
+    id:   "retail-orchestrator",
+    name: AgentName,
+    description: Instructions);
+
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+builder.Services.AddHttpClient().AddLogging();
+builder.Services.AddAGUI();
+builder.AddAIAgent(AgentName, (_, _) => retailAgent).WithInMemorySessionStore();
+
+WebApplication app = builder.Build();
+app.UseMiddleware<ApiKeyMiddleware>();                       // see API-key middleware below
+app.MapAGUI(AgentName, "/retail");                           // (agentName, pattern)
+app.MapPost("/scripted-reservation", async (ReservationRequest r) =>
+    Results.Ok(new { order = await ServerTools.RunRetailWorkflow(r.CustomerId, r.Sku, r.Quantity, r.PreferredWarehouse) }));
+await app.RunAsync("http://127.0.0.1:5100");
+```
+
+Key rules:
+
+- Always pass an **explicit `name:`** to `AIFunctionFactory.Create(...)`. Without it the SDK uses the .NET method name, and the system prompt's `snake_case` references won't match the function name the model sees.
+- Never define your own `MapAGUI(this WebApplication, ...)` extension. It will out-rank the real `IEndpointRouteBuilder` extension during overload resolution and turn the SSE stream into a one-shot JSON blob.
+- Mount AG-UI at `/<path>` and a non-AG-UI bypass route at `/<other-path>` on the same `WebApplication` — the bypass is how you get reliable client-tool evidence with the Copilot CLI backbone (see warning above).
+
+### API-key middleware (`X-API-Key`)
+
+`AddAGUI` ships no authentication. For the workshop and most production setups, gate every request with a header check:
+
+```csharp
+public sealed class ApiKeyMiddleware(RequestDelegate next, ILogger<ApiKeyMiddleware> logger)
+{
+    private static int _warned;
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        string? expected = Environment.GetEnvironmentVariable("AG_UI_API_KEY");
+        if (string.IsNullOrEmpty(expected))
+        {
+            if (Interlocked.Exchange(ref _warned, 1) == 0)
+                logger.LogWarning("AG_UI_API_KEY is not set — running in dev mode without auth.");
+            await next(context);
+            return;
+        }
+
+        if (!context.Request.Headers.TryGetValue("X-API-Key", out var got) || got != expected)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsync("bad api key");
+            return;
+        }
+
+        await next(context);
+    }
+}
+
+// Program.cs:  app.UseMiddleware<ApiKeyMiddleware>();   BEFORE  app.MapAGUI(...)
+```
+
 ### Customizing Behavior with `DelegatingAIAgent`
 
 Wrap an inner `AIAgent` to inject AG-UI-specific behavior — shared state, predictive state updates, structured snapshots, multi-turn orchestration. The Dojo server uses this pattern for every advanced scenario.
@@ -528,12 +632,16 @@ while (true)
 ## Best Practices
 
 1. **Production session storage.** `WithInMemorySessionStore()` loses everything on restart. Implement a session store backed by Redis, Cosmos DB, or your existing chat history store, and call `.WithSessionStore<TStore>()`.
-2. **Auth at the HTTP layer.** AG-UI is plain HTTP/SSE — add ASP.NET Core auth middleware (`AddAuthentication` + `RequireAuthorization()`) in front of `MapAGUI`. Don't rely on the protocol for security.
+2. **Auth at the HTTP layer.** AG-UI is plain HTTP/SSE — add ASP.NET Core auth middleware (`AddAuthentication` + `RequireAuthorization()`) in front of `MapAGUI`, or use a simple `ApiKeyMiddleware` like the one above. Don't rely on the protocol for security.
 3. **Bound client timeouts.** AG-UI runs can stream for a long time. Set `HttpClient.Timeout` generously (e.g. 60 s+) and pass `CancellationToken` through `RunStreamingAsync(..., cancellationToken)` so users can abort.
 4. **Surface frontend tool errors.** Wrap your `AIFunctionFactory.Create` delegate body in try/catch and return a structured error object — otherwise the model receives an opaque exception string and can't recover.
 5. **Don't block on `DataContent` snapshots.** State snapshots can arrive interleaved with text. Render them incrementally — patch your UI on every snapshot rather than waiting for the run to end.
 6. **Production credential.** Replace `DefaultAzureCredential` with a specific credential (e.g. `ManagedIdentityCredential`) in deployed environments to avoid credential-chain probing latency and accidental fallbacks.
 7. **HTTP logging in dev only.** The Dojo server enables full request/response body logging (`HttpLoggingFields.RequestBody | ResponseBody`). Keep that on `Development` profile only — SSE bodies are large.
+8. **GitHub Copilot CLI backbone: always go through `SessionConfig`.** `CopilotClient.AsAIAgent(sessionConfig, ownsClient, id, name, description)` is the only overload that lets you install `OnPermissionRequest = PermissionHandler.ApproveAll`. The bare `(ownsClient, name, instructions, tools)` overload throws `ArgumentException "An OnPermissionRequest handler is required"` the first time the model tries to call a tool — the CLI raises a `CUSTOM_TOOL` permission per function call regardless of `[Description]`/`AIFunctionFactory` configuration. The `Microsoft.Agents.AI.GitHub.Copilot` package brings `GitHub.Copilot.SDK` in transitively — do not add a direct `<PackageReference>` to the SDK.
+9. **GitHub Copilot CLI backbone: never trust frontend tools to round-trip.** The CLI's tool list is fixed at `SessionConfig` construction time; tools advertised by `AGUIChatClient.AsAIAgent(tools: ...)` are *not* merged into the running session. Expose a parallel non-AG-UI HTTP endpoint (e.g. `app.MapPost("/scripted-reservation", ...)`) that performs the same work, and have the client invoke its local delegate after a direct call to that endpoint. This is the only deterministic way to assert that the frontend tool actually fired locally in a verify harness.
+10. **Always name your tools explicitly.** `AIFunctionFactory.Create(method, name: "snake_case", description: "...")` — the system prompt almost always refers to the function by its snake_case name, and silently falling back to the .NET method name (`PascalCase`) leaves the model unable to dispatch.
+11. **Verify harnesses: walk to repo root.** When the verify binary lives in `bin/Debug/net10.0/`, relative project paths like `"../../RetailServer"` resolve incorrectly. Walk parent directories from `AppContext.BaseDirectory` until a known sentinel file (e.g. `data/zava_warehouses.json`) is found, then build absolute project paths from there. Pre-build all projects and spawn subprocesses with `dotnet run --project "<abs>" --no-build` to keep stdout deterministic.
 
 ## Reference Files
 

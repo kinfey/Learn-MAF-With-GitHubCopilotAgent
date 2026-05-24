@@ -4,3 +4,7 @@
 
 # Ignore local environment overrides
 .env
+
+# Ignore macOS metadata files
+.DS_Store
+**/.DS_Store
