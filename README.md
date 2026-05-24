@@ -26,10 +26,10 @@ Over five labs you will **learn the Microsoft Agent Framework** by building auto
 
 | # | Lab | MAF concept(s) learned | How you build it | Outcome (Python and/or C#) |
 | --- | --- | --- | --- | --- |
-| 1 | [基础知识 — Fundamentals](lab-01-fundamentals/README.md) | Agent runtime model, `Agent` base abstraction | Hand-written (1 Python script + 1 C# console project) | A "Hello, ZavaShop" Copilot-backed agent |
-| 2 | [单 Agent — Product Advisor](lab-02-single-agent/README.md) | Function tools, `AgentSession`, streaming | Coding Agent + `zava-single-agent-builder` | A product Q&A agent backed by Zava's catalog |
+| 1 | [Fundamentals](lab-01-fundamentals/README.md) | Agent runtime model, `Agent` base abstraction | Hand-written (1 Python script + 1 C# console project) | A "Hello, ZavaShop" Copilot-backed agent |
+| 2 | [Single Agent — Product Advisor](lab-02-single-agent/README.md) | Function tools, `AgentSession`, streaming | Coding Agent + `zava-single-agent-builder` | A product Q&A agent backed by Zava's catalog |
 | 3 | [MCP — Inventory Service](lab-03-mcp/README.md) | Local MCP tools, tool approval (HITL) | Coding Agent + `zava-mcp-integrator` | Agent that queries live stock across warehouses |
-| 4 | [多 Agent 工作流 — Retail & Supply Chain](lab-04-multi-agent-workflow/README.md) | Workflows: executors, edges, Sequential / Concurrent / Handoff | Coding Agent + `zava-workflow-architect` | Two end-to-end workflows for retail and supply chain |
+| 4 | [Multi-Agent Workflow — Retail & Supply Chain](lab-04-multi-agent-workflow/README.md) | Workflows: executors, edges, Sequential / Concurrent / Handoff | Coding Agent + `zava-workflow-architect` | Two end-to-end workflows for retail and supply chain |
 | 5 | [AGUI — Hosted Coding Agent UI](lab-05-agui/README.md) | AG-UI integration, hybrid tool execution | Coding Agent + `zava-agui-engineer` | Web-ready streaming front for the retail workflow |
 
 Each lab is independent in code but builds conceptually on the previous one. The **MAF concept** column is what you walk away knowing; **How you build it** is the vehicle. Pick Python or C# per lab — there is no requirement to stay on one stack across labs.
