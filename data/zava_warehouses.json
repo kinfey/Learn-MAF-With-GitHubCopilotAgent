@@ -1,0 +1,104 @@
+{
+  "warehouses": [
+    {
+      "code": "WH-SEA",
+      "name": "Seattle DC",
+      "region": "North America",
+      "currency": "USD",
+      "stock": {
+        "LIP-001": 320,
+        "LIP-002": 180,
+        "LIP-007": 95,
+        "FND-014": 210,
+        "FND-022": 150,
+        "SKN-027": 60,
+        "SKN-030": 120,
+        "SKN-041": 80,
+        "FRG-009": 40,
+        "FRG-015": 18,
+        "TOL-003": 75,
+        "TOL-008": 240
+      }
+    },
+    {
+      "code": "WH-SIN",
+      "name": "Singapore DC",
+      "region": "APAC",
+      "currency": "SGD",
+      "stock": {
+        "LIP-001": 140,
+        "LIP-002": 220,
+        "LIP-007": 0,
+        "FND-014": 65,
+        "FND-022": 200,
+        "SKN-027": 110,
+        "SKN-030": 95,
+        "SKN-041": 130,
+        "FRG-009": 55,
+        "FRG-015": 12,
+        "TOL-003": 30,
+        "TOL-008": 180
+      }
+    },
+    {
+      "code": "WH-LON",
+      "name": "London DC",
+      "region": "EMEA",
+      "currency": "GBP",
+      "stock": {
+        "LIP-001": 75,
+        "LIP-002": 60,
+        "LIP-007": 110,
+        "FND-014": 90,
+        "FND-022": 0,
+        "SKN-027": 45,
+        "SKN-030": 70,
+        "SKN-041": 40,
+        "FRG-009": 90,
+        "FRG-015": 25,
+        "TOL-003": 50,
+        "TOL-008": 120
+      }
+    },
+    {
+      "code": "WH-DXB",
+      "name": "Dubai DC",
+      "region": "MEA",
+      "currency": "AED",
+      "stock": {
+        "LIP-001": 0,
+        "LIP-002": 30,
+        "LIP-007": 40,
+        "FND-014": 25,
+        "FND-022": 35,
+        "SKN-027": 60,
+        "SKN-030": 50,
+        "SKN-041": 70,
+        "FRG-009": 110,
+        "FRG-015": 80,
+        "TOL-003": 20,
+        "TOL-008": 65
+      }
+    },
+    {
+      "code": "WH-GRU",
+      "name": "São Paulo DC",
+      "region": "LATAM",
+      "currency": "BRL",
+      "stock": {
+        "LIP-001": 50,
+        "LIP-002": 40,
+        "LIP-007": 25,
+        "FND-014": 60,
+        "FND-022": 45,
+        "SKN-027": 30,
+        "SKN-030": 35,
+        "SKN-041": 20,
+        "FRG-009": 18,
+        "FRG-015": 5,
+        "TOL-003": 15,
+        "TOL-008": 90
+      }
+    }
+  ]
+}

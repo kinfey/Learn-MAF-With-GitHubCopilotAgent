@@ -1,0 +1,100 @@
+{
+  "products": [
+    {
+      "sku": "LIP-001",
+      "name": "Velvet Rouge Matte Lipstick",
+      "category": "Lipstick",
+      "price_usd": 24.0,
+      "description": "Long-wear matte lipstick in classic red.",
+      "tags": ["matte", "red", "long-wear"]
+    },
+    {
+      "sku": "LIP-002",
+      "name": "Glossy Pink Plumper",
+      "category": "Lipstick",
+      "price_usd": 22.0,
+      "description": "Hydrating gloss with a subtle pink tint.",
+      "tags": ["gloss", "pink", "hydrating"]
+    },
+    {
+      "sku": "LIP-007",
+      "name": "Bold Berry Liquid Lip",
+      "category": "Lipstick",
+      "price_usd": 26.0,
+      "description": "High-pigment liquid lipstick in berry tones.",
+      "tags": ["liquid", "berry", "high-pigment"]
+    },
+    {
+      "sku": "FND-014",
+      "name": "Even Glow Foundation",
+      "category": "Foundation",
+      "price_usd": 38.0,
+      "description": "Buildable medium-coverage foundation, oil-free.",
+      "tags": ["medium-coverage", "oil-free", "buildable"]
+    },
+    {
+      "sku": "FND-022",
+      "name": "Hydra Skin Tint",
+      "category": "Foundation",
+      "price_usd": 32.0,
+      "description": "Sheer tinted moisturizer with SPF 30.",
+      "tags": ["sheer", "spf", "hydrating"]
+    },
+    {
+      "sku": "SKN-027",
+      "name": "Ceramide Repair Cream",
+      "category": "Skincare",
+      "price_usd": 48.0,
+      "description": "Night cream with ceramides and peptides.",
+      "tags": ["night-cream", "ceramide", "peptide"]
+    },
+    {
+      "sku": "SKN-030",
+      "name": "Vitamin C Brightening Serum",
+      "category": "Skincare",
+      "price_usd": 55.0,
+      "description": "15% vitamin C serum for radiance and even tone.",
+      "tags": ["serum", "vitamin-c", "brightening"]
+    },
+    {
+      "sku": "SKN-041",
+      "name": "Hyaluronic Acid Booster",
+      "category": "Skincare",
+      "price_usd": 42.0,
+      "description": "Triple-weight HA serum for deep hydration.",
+      "tags": ["serum", "hyaluronic-acid", "hydration"]
+    },
+    {
+      "sku": "FRG-009",
+      "name": "Citrus Bloom Eau de Parfum",
+      "category": "Fragrance",
+      "price_usd": 88.0,
+      "description": "Fresh citrus opening with a floral heart.",
+      "tags": ["edp", "citrus", "floral"]
+    },
+    {
+      "sku": "FRG-015",
+      "name": "Midnight Oud",
+      "category": "Fragrance",
+      "price_usd": 120.0,
+      "description": "Warm oud and amber for evening wear.",
+      "tags": ["edp", "oud", "amber", "evening"]
+    },
+    {
+      "sku": "TOL-003",
+      "name": "Kabuki Brush Set",
+      "category": "Tools",
+      "price_usd": 65.0,
+      "description": "Five-piece synthetic brush set for face and eyes.",
+      "tags": ["brushes", "synthetic", "set"]
+    },
+    {
+      "sku": "TOL-008",
+      "name": "Compact Travel Mirror",
+      "category": "Tools",
+      "price_usd": 18.0,
+      "description": "10x magnification compact mirror with LED.",
+      "tags": ["mirror", "led", "travel"]
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "orders": [
+    {
+      "order_id": "ORD-1001",
+      "customer_id": "CUST-501",
+      "state": "PLACED",
+      "warehouse": "WH-SEA",
+      "lines": [
+        { "sku": "LIP-001", "quantity": 2, "unit_price_usd": 24.0 },
+        { "sku": "SKN-030", "quantity": 1, "unit_price_usd": 55.0 }
+      ]
+    },
+    {
+      "order_id": "ORD-1002",
+      "customer_id": "CUST-512",
+      "state": "RESERVED",
+      "warehouse": "WH-LON",
+      "lines": [
+        { "sku": "FRG-009", "quantity": 1, "unit_price_usd": 88.0 }
+      ]
+    },
+    {
+      "order_id": "ORD-1003",
+      "customer_id": "CUST-503",
+      "state": "DRAFT",
+      "warehouse": "WH-SIN",
+      "lines": [
+        { "sku": "SKN-041", "quantity": 3, "unit_price_usd": 42.0 },
+        { "sku": "TOL-008", "quantity": 1, "unit_price_usd": 18.0 }
+      ]
+    },
+    {
+      "order_id": "ORD-1004",
+      "customer_id": "CUST-577",
+      "state": "SHIPPED",
+      "warehouse": "WH-DXB",
+      "lines": [
+        { "sku": "FRG-015", "quantity": 1, "unit_price_usd": 120.0 }
+      ]
+    }
+  ]
+}
